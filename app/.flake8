@@ -4,5 +4,4 @@ exclude =
     __pycache__,
     manage.py,
     settings.py
-    core/tests
-    user/tests
+    tests
