@@ -5,26 +5,37 @@ from rest_framework import status
 from rest_framework.test import APIClient
 from core.models import Recipe, Ingredient, Tag
 from recipe.serializers import RecipeSerializer, RecipeDetailSerializer
+import os
+import tempfile
+from PIL import Image
 
 
 RECIPES_URL = reverse('recipe:recipe-list')
 
 
+def image_upload_url(recipe_id):
+    """Return url for recipe image upload"""
+    return reverse('recipe:recipe-upload-image', args=[recipe_id])
+
+
 def sample_recipe(user, **params):
     """Create and return a sample recipe"""
     defaults = {
-                'title': 'Sample Recipe', 'time_minutes': 10, "price": 5.00
-               }
+        'title': 'Sample Recipe', 'time_minutes': 10, "price": 5.00
+    }
     defaults.update(params)
     return Recipe.objects.create(user=user, **defaults)
+
 
 def sample_ingredient(user, name='Cinnamon'):
     """Create and return a sample ingredient"""
     return Ingredient.objects.create(user=user, name=name)
 
+
 def sample_tag(user, name='Main Course'):
     """Create and return a sample tag"""
     return Tag.objects.create(user=user, name=name)
+
 
 def detail_url(recipe_id):
     """Return recipe details URL"""
@@ -33,8 +44,9 @@ def detail_url(recipe_id):
 
 class PublicRecipeAPITests(TestCase):
     """Test unauthorized recipe API access"""
+
     def setUp(self):
-        self.client = APIClient()    
+        self.client = APIClient()
 
     def test_auth_required(self):
         """Test that authorization is required"""
@@ -44,13 +56,13 @@ class PublicRecipeAPITests(TestCase):
 
 class PrivateRecipeAPITests(TestCase):
     """Test authenticated recipe API Access"""
+
     def setUp(self):
         self.client = APIClient()
-        self.user = get_user_model().objects.create_user('test@gmail.com', 
+        self.user = get_user_model().objects.create_user('test@gmail.com',
                                                          'testpass')
         self.client.force_authenticate(self.user)
 
-    
     def test_retrieve_recipes(self):
         """Test retrieving a list of recipes"""
         sample_recipe(user=self.user)
@@ -60,11 +72,10 @@ class PrivateRecipeAPITests(TestCase):
         serializer = RecipeSerializer(recipes, many=True)
         self.assertEqual(res.status_code, status.HTTP_200_OK)
         self.assertEqual(res.data, serializer.data)
-    
 
     def test_recipes_limited_to_users(self):
         """Test retrieving recipes for user"""
-        user2 = get_user_model().objects.create_user('test1@gmail.com', 
+        user2 = get_user_model().objects.create_user('test1@gmail.com',
                                                      'testpass')
         sample_recipe(user=user2)
         sample_recipe(user=self.user)
@@ -74,7 +85,6 @@ class PrivateRecipeAPITests(TestCase):
         self.assertEqual(res.status_code, status.HTTP_200_OK)
         self.assertEqual(len(res.data), 1)
         self.assertEqual(res.data, serializer.data)
-
 
     def test_view_recipe_detail(self):
         """Test viewing a recipe detail"""
@@ -88,7 +98,8 @@ class PrivateRecipeAPITests(TestCase):
 
     def test_create_basic_recipe(self):
         """Test creating recipe"""
-        payload = {'title': 'Chocolate Cake', 'time_minutes':60, 'price': 5.00}
+        payload = {'title': 'Chocolate Cake',
+                   'time_minutes': 60, 'price': 5.00}
         res = self.client.post(RECIPES_URL, payload)
         self.assertEqual(res.status_code, status.HTTP_201_CREATED)
         recipe = Recipe.objects.get(id=res.data['id'])
@@ -100,7 +111,7 @@ class PrivateRecipeAPITests(TestCase):
         tag1 = sample_tag(user=self.user, name='Vegan')
         tag2 = sample_tag(user=self.user, name='Dessert')
         payload = {'title': 'Cake', "tags": [tag1.id, tag2.id], "time_minutes":
-                    60, "price":20.00}
+                   60, "price": 20.00}
         res = self.client.post(RECIPES_URL, payload)
         self.assertEqual(res.status_code, status.HTTP_201_CREATED)
         recipe = Recipe.objects.get(id=res.data['id'])
@@ -113,8 +124,8 @@ class PrivateRecipeAPITests(TestCase):
         """Test creating recipe with ingredients"""
         ingredient1 = sample_ingredient(user=self.user, name='Chicken')
         ingredient2 = sample_ingredient(user=self.user, name='Ginger')
-        payload = {'title': 'Chicken Tikka', "ingredients": [ingredient1.id, 
-                   ingredient2.id], "time_minutes":60, "price":20.00}
+        payload = {'title': 'Chicken Tikka', "ingredients": [ingredient1.id,
+                                                             ingredient2.id], "time_minutes": 60, "price": 20.00}
         res = self.client.post(RECIPES_URL, payload)
         self.assertEqual(res.status_code, status.HTTP_201_CREATED)
         recipe = Recipe.objects.get(id=res.data['id'])
@@ -138,7 +149,7 @@ class PrivateRecipeAPITests(TestCase):
         self.assertIn(new_tag, tags)
 
     def test_full_update_recipe(self):
-        """Test updating a recipe with put""" 
+        """Test updating a recipe with put"""
         recipe = sample_recipe(user=self.user)
         recipe.tags.add(sample_tag(user=self.user))
         payload = {'title': 'Chicken Tikka', 'time_minutes': 60, "price": 5.00}
@@ -150,3 +161,34 @@ class PrivateRecipeAPITests(TestCase):
         self.assertEqual(recipe.price, payload['price'])
         tags = recipe.tags.all()
         self.assertEqual(len(tags), 0)
+
+
+class RecipeImageUploadTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.user = get_user_model().objects.create_user('user@gmail.com',
+                                                         'testpass')
+        self.client.force_authenticate(self.user)
+        self.recipe = sample_recipe(user=self.user)
+
+    def tearDown(self):
+        self.recipe.image.delete()
+
+    def test_upload_image_to_recipe(self):
+        """Test uploading an image to recipe"""
+        url = image_upload_url(self.recipe.id)
+        with tempfile.NamedTemporaryFile(suffix='.jpeg') as ntf:
+            img = Image.new('RGB', (10, 10))
+            img.save(ntf, format='jpeg')
+            ntf.seek(0)
+            res = self.client.post(url, {'image': ntf}, format='multipart')
+        self.recipe.refresh_from_db()
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertIn('image', res.data)
+        self.assertTrue(os.path.exists(self.recipe.image.path))
+
+    def test_upload_image_bad_request(self):
+        """Test uploading an invalid image"""
+        url = image_upload_url(self.recipe.id)
+        res = self.client.post(url, {'image': 'invalid'}, format='multipart')
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
